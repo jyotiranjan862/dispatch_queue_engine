@@ -1,0 +1,52 @@
+﻿{
+  "name": "dispatch-queue-engine",
+  "version": "1.0.0",
+  "description": "Self-hosted webhook dispatcher with guaranteed delivery, automatic retries, deduplication, and dead-letter queue.",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "build": "rimraf dist && tsc --project tsconfig.json",
+    "start:api": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
+    "dev:api": "nodemon --exec tsx src/server.ts",
+    "dev:worker": "nodemon --exec tsx src/worker.ts",
+    "test": "jest --forceExit --detectOpenHandles",
+    "test:unit": "jest --testPathPattern=test/unit --forceExit",
+    "test:integration": "jest --testPathPattern=test/integration --forceExit --runInBand",
+    "test:watch": "jest --watch",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "bullmq": "^5.38.0",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "ioredis": "^5.6.1",
+    "pg": "^8.14.1",
+    "uuid": "^11.1.0",
+    "winston": "^3.17.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.13.17",
+    "@types/pg": "^8.11.11",
+    "@types/supertest": "^6.0.2",
+    "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.24.1",
+    "@typescript-eslint/parser": "^8.24.1",
+    "eslint": "^9.21.0",
+    "jest": "^29.7.0",
+    "nock": "^13.5.6",
+    "nodemon": "^3.1.9",
+    "prettier": "^3.5.2",
+    "rimraf": "^6.0.1",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.2.6",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

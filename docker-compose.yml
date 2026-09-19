@@ -1,0 +1,82 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: dispatch_api
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file: .env
+    environment:
+      - REDIS_HOST=redis
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/dispatch_engine
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dispatch_net
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: dispatch_worker
+    env_file: .env
+    environment:
+      - REDIS_HOST=redis
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/dispatch_engine
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dispatch_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: dispatch_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - dispatch_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dispatch_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: dispatch_engine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dispatch_engine"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - dispatch_net
+
+volumes:
+  redis_data:
+  postgres_data:
+
+networks:
+  dispatch_net:
+    driver: bridge
