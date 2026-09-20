@@ -1,10 +1,10 @@
-# 📦 Dispatch Queue Engine — Webhook Dispatcher
+# Dispatch Queue Engine — Webhook Dispatcher
 
-> **Stack: Express.js · BullMQ · Redis · PostgreSQL · Docker · Jest**
+> **Stack: Express.js · BullMQ · Redis · MongoDB · Docker · Jest**
 
 ---
 
-## 🔥 The Real Problem
+## The Real Problem
 
 Most teams build their webhook integrations like this:
 
@@ -24,7 +24,7 @@ This breaks in production **every single day**:
 
 ---
 
-## ✅ How This System Solves It
+## How This System Solves It
 
 **Dispatch Queue Engine** is a self-hosted, drop-in webhook relay you deploy once and point your clients at.
 
@@ -37,7 +37,7 @@ After:   Client → Dispatch Engine → Queue → Worker → Third-party API
                 in < 1ms (Redis)         → DLQ if all 5 fail
 ```
 
-Anyone can host this on their server, point it at their own Redis + PostgreSQL, and **never write webhook retry logic again**. The engine handles:
+Anyone can host this on their server, point it at their own Redis + MongoDB, and **never write webhook retry logic again**. The engine handles:
 
 - **Deduplication** — same event key never processes twice, guaranteed by atomic Redis locks
 - **Retries with backoff** — automatic, configurable, no client code needed
@@ -47,11 +47,11 @@ Anyone can host this on their server, point it at their own Redis + PostgreSQL, 
 
 ---
 
-## 🌐 How Anyone Can Use This (Host Once, Use Forever)
+## How Anyone Can Use This (Host Once, Use Forever)
 
 ```
 Step 1: Clone this repo
-Step 2: cp .env.example .env  →  fill in your Redis + PostgreSQL URLs + secrets
+Step 2: cp .env.example .env  →  fill in your Redis + MongoDB URLs + secrets
 Step 3: docker compose up -d
 Step 4: Done — your dispatcher is live on port 3000
 ```
@@ -75,7 +75,7 @@ The engine queues it, retries it on failure, signs it with HMAC, and drops it in
 
 ---
 
-## 📋 Functional Requirements
+## Functional Requirements
 
 ### FR-1: Idempotent Webhook Ingestion
 
@@ -150,7 +150,7 @@ const signature = crypto
 
 **Trigger:** Job fails all 5 retry attempts.
 
-**PostgreSQL Schema:**
+**MongoDB Schema:**
 ```sql
 CREATE TABLE dead_letter_queue (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -195,7 +195,7 @@ CREATE INDEX idx_dlq_job_id    ON dead_letter_queue(job_id);
 
 ---
 
-## 🔧 Non-Functional Requirements
+## Non-Functional Requirements
 
 ### Performance
 - Ingest endpoint: **< 50ms p99** at 200 RPS (Redis lock + queue write).
@@ -208,7 +208,7 @@ CREATE INDEX idx_dlq_job_id    ON dead_letter_queue(job_id);
 ### Observability
 - Structured JSON logging (morgan + custom middleware).
 - Every log includes `{ timestamp, level, job_id, service, message }`.
-- `GET /health` → Redis + PostgreSQL connectivity check.
+- `GET /health` → Redis + MongoDB connectivity check.
 
 ### Security
 - All secrets from `.env` — zero hardcoding.
@@ -217,13 +217,13 @@ CREATE INDEX idx_dlq_job_id    ON dead_letter_queue(job_id);
 - Idempotency keys: UUID v4 regex validation before any Redis call.
 
 ### Containerization
-- `docker-compose.yml`: `api`, `worker`, `redis`, `postgres` — one command to run everything.
+- `docker-compose.yml`: `api`, `worker`, `redis`, `mongo` — one command to run everything.
 - Named volumes: data survives container restarts.
 - `.env.example`: every required variable documented.
 
 ---
 
-## 🧪 Testing Requirements
+## Testing Requirements
 
 ### Unit Tests
 
@@ -232,7 +232,7 @@ CREATE INDEX idx_dlq_job_id    ON dead_letter_queue(job_id);
 | `idempotency.service.test.js` | SETNX blocks duplicate within 24h |
 | `signer.service.test.js` | HMAC deterministic; tampered payload fails |
 | `retry.policy.test.js` | Delay in expected exponential range |
-| `dlq.service.test.js` | Failed job written to PostgreSQL |
+| `dlq.service.test.js` | Failed job written to MongoDB |
 
 ### Integration Tests (Supertest)
 
@@ -269,7 +269,7 @@ it('routes poison-pill jobs to DLQ without crashing the worker', async () => {
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 dispatch-queue-engine/
@@ -300,7 +300,7 @@ dispatch-queue-engine/
     │   │   └── logger.middleware.js      # Structured JSON logging
     │   │
     │   ├── db/
-    │   │   ├── postgres.js              # pg pool singleton
+    │   │   ├── mongo.js              # pg pool singleton
     │   │   └── redis.js                 # ioredis singleton
     │   │
     │   └── config/
@@ -319,7 +319,7 @@ dispatch-queue-engine/
 
 ---
 
-## 🔑 Environment Variables
+## Environment Variables
 
 ```env
 # Application
@@ -330,8 +330,8 @@ PORT=3000
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-# PostgreSQL
-DATABASE_URL=postgresql://postgres:password@localhost:5432/dispatch_engine
+# MongoDB
+DATABASE_URL=mongoql://mongo:password@localhost:5432/dispatch_engine
 
 # Security
 WEBHOOK_SECRET=your-minimum-32-char-secret-here
@@ -348,7 +348,7 @@ IDEMPOTENCY_TTL_SECONDS=86400
 
 ---
 
-## 🚀 Implementation Phases
+## Implementation Phases
 
 | Phase | Scope | Estimate |
 |---|---|---|
@@ -356,20 +356,20 @@ IDEMPOTENCY_TTL_SECONDS=86400
 | Phase 2 | Idempotency service + Redis | 1 day |
 | Phase 3 | BullMQ queue + Worker + Retry | 2 days |
 | Phase 4 | HMAC signing + Dispatch HTTP client | 1 day |
-| Phase 5 | DLQ PostgreSQL + Admin endpoint | 1–2 days |
+| Phase 5 | DLQ MongoDB + Admin endpoint | 1–2 days |
 | Phase 6 | Jest unit + Integration suite | 2 days |
 | Phase 7 | Health endpoint + README + Polish | 1 day |
 | **Total** | | **~9–10 days** |
 
 ---
 
-## 📊 Key Architectural Decisions
+## Key Architectural Decisions
 
 | Decision | Why |
 |---|---|
 | BullMQ over raw Redis queues | Built-in job state machine, retry hooks, delayed jobs, distributed worker locking |
 | Separate worker process | Fault isolation — worker OOM/crash does not kill the API server |
-| PostgreSQL DLQ over BullMQ built-in DLQ | Persistent, queryable, survives Redis flush, audit-friendly |
+| MongoDB DLQ over BullMQ built-in DLQ | Persistent, queryable, survives Redis flush, audit-friendly |
 | Randomized jitter on backoff | Prevents thundering herd — 100 simultaneous failures don't retry at the same instant |
 | Atomic SETNX for idempotency | Prevents race condition where two parallel requests with the same key both pass |
 | Express over NestJS | Lightweight, minimal overhead, full visibility — no magic behind decorators |

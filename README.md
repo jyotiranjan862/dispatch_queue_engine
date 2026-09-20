@@ -1,4 +1,4 @@
-# 📦 Dispatch Queue Engine
+# Dispatch Queue Engine
 
 > **Self-hosted webhook dispatcher with guaranteed delivery, automatic retries, deduplication, and dead-letter queue.**
 > Deploy once. Never write webhook retry logic again.
@@ -37,7 +37,7 @@ You host this engine **once**. Then inside your own backend code, anywhere an ev
 // Your backend — POST /checkout handler
 app.post('/checkout', async (req, res) => {
   await db.saveOrder(req.body);
-  await axios.post('https://slack.com/webhook', { text: 'New order!' }); // 💥 what if Slack is down?
+  await axios.post('https://slack.com/webhook', { text: 'New order!' }); // what if Slack is down?
   res.json({ ok: true });
 });
 ```
@@ -47,7 +47,7 @@ app.post('/checkout', async (req, res) => {
 // Your backend — POST /checkout handler
 app.post('/checkout', async (req, res) => {
   await db.saveOrder(req.body);
-  // 🔥 Just call the dispatcher. It handles retries, deduplication, signing.
+  // Just call the dispatcher. It handles retries, deduplication, signing.
   await axios.post('https://your-dispatcher.com/webhooks/ingest', {
     target_url: 'https://slack.com/webhook',
     payload: { text: 'New order!' }
@@ -99,8 +99,8 @@ PORT=3000
 REDIS_HOST=redis
 REDIS_PORT=6379
 
-# PostgreSQL connection (leave as-is if using docker-compose)
-DATABASE_URL=postgresql://postgres:password@postgres:5432/dispatch_engine
+# MongoDB connection (leave as-is if using docker-compose)
+MONGODB_URI=mongodb://mongo:27017/dispatch_engine
 
 # HMAC signing secret — minimum 32 characters, keep this secret
 WEBHOOK_SECRET=change-this-to-a-long-random-secret-string
@@ -119,7 +119,7 @@ This starts four containers:
 - `api` → Express server on port 3000
 - `worker` → BullMQ job processor (isolated from the API)
 - `redis` → Job queue + idempotency key store
-- `postgres` → Dead-letter queue storage
+- `mongo` → Dead-letter queue storage
 
 ### Step 4 — Verify It's Running
 
@@ -132,12 +132,12 @@ Expected response:
 {
   "status": "ok",
   "redis": "connected",
-  "postgres": "connected",
+  "mongodb": "connected",
   "uptime_seconds": 12
 }
 ```
 
-**You're live.** 🎉
+**You're live.** 
 
 ---
 
@@ -176,7 +176,7 @@ curl -X POST http://localhost:3000/webhooks/ingest \
 2. Signs the payload with HMAC-SHA256 → `X-Dispatch-Signature: sha256=...`
 3. POSTs to `target_url` (your downstream service)
 4. On failure → retries up to 5 times with exponential backoff
-5. All 5 fail → stored in PostgreSQL DLQ, replayable anytime via admin API
+5. All 5 fail → stored in MongoDB DLQ, replayable anytime via admin API
 
 ### Integration in Node.js (inside your backend)
 
@@ -335,7 +335,7 @@ You don't need to configure anything — retries are automatic.
 | 4 | ~8 seconds |
 | 5 | ~16 seconds |
 
-After all 5 attempts fail, the job is moved to the dead-letter queue in PostgreSQL.
+After all 5 attempts fail, the job is moved to the dead-letter queue in MongoDB.
 
 ---
 
@@ -343,10 +343,10 @@ After all 5 attempts fail, the job is moved to the dead-letter queue in PostgreS
 
 ### View Failed Jobs
 
-Connect to your PostgreSQL container:
+Connect to your MongoDB container:
 
 ```bash
-docker compose exec postgres psql -U postgres -d dispatch_engine
+docker compose exec mongo mongosh dispatch_engine
 ```
 
 ```sql
@@ -396,13 +396,13 @@ curl -X POST http://localhost:3000/admin/retry-failed \
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `target_url` | string (URL) | ✅ | Where to dispatch the payload |
-| `payload` | object | ✅ | Any JSON object you want delivered |
+| `target_url` | string (URL) | Yes | Where to dispatch the payload |
+| `payload` | object | Yes | Any JSON object you want delivered |
 
 | Header | Required | Description |
 |---|---|---|
-| `Idempotency-Key` | ✅ | UUID v4. Blocks duplicates for 24h |
-| `Content-Type` | ✅ | `application/json` |
+| `Idempotency-Key` | Yes | UUID v4. Blocks duplicates for 24h |
+| `Content-Type` | Yes | `application/json` |
 
 | Status | Meaning |
 |---|---|
@@ -417,7 +417,7 @@ curl -X POST http://localhost:3000/admin/retry-failed \
 
 | Header | Required | Description |
 |---|---|---|
-| `Authorization` | ✅ | `Bearer <ADMIN_TOKEN>` |
+| `Authorization` | Yes | `Bearer <ADMIN_TOKEN>` |
 
 | Field | Type | Description |
 |---|---|---|
@@ -434,7 +434,7 @@ No authentication required.
 {
   "status": "ok",
   "redis": "connected",
-  "postgres": "connected",
+  "mongodb": "connected",
   "uptime_seconds": 3842
 }
 ```
@@ -448,7 +448,7 @@ No authentication required.
 | `PORT` | No | `3000` | API server port |
 | `REDIS_HOST` | Yes | — | Redis hostname |
 | `REDIS_PORT` | No | `6379` | Redis port |
-| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
+| `MONGODB_URI` | Yes | — | MongoDB connection string |
 | `WEBHOOK_SECRET` | Yes | — | HMAC signing secret (min 32 chars) |
 | `ADMIN_TOKEN` | Yes | — | Bearer token for admin endpoints |
 | `QUEUE_NAME` | No | `webhook-dispatch` | BullMQ queue name |
@@ -460,7 +460,7 @@ No authentication required.
 
 ## Running Without Docker (Development)
 
-If you want to run locally with your own Redis and PostgreSQL:
+If you want to run locally with your own Redis and MongoDB:
 
 ```bash
 # Install dependencies
@@ -515,7 +515,7 @@ BullMQ uses Redis-based distributed locking — multiple workers process jobs co
 # Stop all containers
 docker compose down
 
-# Stop and delete all data (Redis + PostgreSQL volumes)
+# Stop and delete all data (Redis + MongoDB volumes)
 docker compose down -v
 ```
 

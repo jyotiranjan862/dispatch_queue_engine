@@ -5,6 +5,7 @@ const config: Config = {
   testEnvironment: "node",
   rootDir: ".",
   testMatch: ["<rootDir>/test/**/*.test.ts"],
+  setupFilesAfterEnv: ["<rootDir>/test/setup.ts"],
   collectCoverageFrom: ["src/**/*.ts", "!src/server.ts", "!src/worker.ts"],
   coverageDirectory: "coverage",
   coverageReporters: ["text", "lcov"],

@@ -1,4 +1,4 @@
-# 🏗️ Architecture Document — Dispatch Queue Engine
+# Architecture Document — Dispatch Queue Engine
 
 > From Low-Level Implementation to High-Level System Design
 
@@ -27,7 +27,7 @@ A **standalone, self-hosted webhook relay service**. Any team deploys it once an
 | **API Server** | Accepts events, deduplicates, enqueues | Express.js |
 | **Redis** | Job queue (BullMQ) + Idempotency key store | Redis 7+ |
 | **Worker Process** | Consumes queue, retries, signs, dispatches | Node.js + BullMQ |
-| **PostgreSQL** | Dead-Letter Queue storage, audit log | PostgreSQL 15+ |
+| **MongoDB** | Dead-Letter Queue storage, audit log | MongoDB 15+ |
 | **Docker Compose** | Orchestrates all services | Docker |
 
 ---
@@ -110,7 +110,7 @@ Redis (BullMQ Queue)
                     │                   │
                     ▼                   ▼
               Re-enqueue          dlq.service.js
-              (delayed)           PostgreSQL INSERT
+              (delayed)           MongoDB INSERT
                                   dead_letter_queue
                                        │
                                   Admin can replay via
@@ -292,7 +292,7 @@ Docker Compose Network
               └───────┬────────┘
                       │
               ┌───────▼────────┐
-              │ postgres:5432  │
+              │ mongo:27017  │
               │  (DLQ table)   │
               └────────────────┘
 ```
@@ -340,7 +340,7 @@ Response 200:
 {
   "status": "ok",
   "redis": "connected",
-  "postgres": "connected",
+  "mongodb": "connected",
   "worker": "alive",
   "uptime_seconds": 3842
 }
@@ -354,9 +354,9 @@ Response 200:
 |---|---|---|
 | Redis goes down mid-ingest | `503` returned to client, no job enqueued | Client retries with same `Idempotency-Key` once Redis recovers |
 | Worker crashes during dispatch | BullMQ re-delivers job (lock expires in ~30s) | Next worker picks up the job |
-| PostgreSQL DLQ write fails | Error logged as CRITICAL, job marked failed in Redis | Manual investigation; DLQ row was never written |
+| MongoDB DLQ write fails | Error logged as CRITICAL, job marked failed in Redis | Manual investigation; DLQ row was never written |
 | Worker receives poison-pill | Retries 5 times with backoff, goes to DLQ | Other jobs in queue are unaffected |
-| All 5 retries exhausted | Moves to PostgreSQL DLQ | Admin replays via `/admin/retry-failed` |
+| All 5 retries exhausted | Moves to MongoDB DLQ | Admin replays via `/admin/retry-failed` |
 | Duplicate event from upstream | Second `SETNX` fails atomically | `409` returned, no second enqueue |
 
 ---
