@@ -4,6 +4,8 @@ import { checkDBHealth } from './config/db';
 import { securityHeaders, requestLogger, notFoundHandler } from './api/middlewares';
 import { errorHandler } from './utils/errorHandler';
 
+import { webhookRouter } from './api/routes/webhook.routes';
+
 export const app = express();
 
 // Global Middlewares
@@ -37,6 +39,9 @@ app.get('/health', async (_req: Request, res: Response) => {
 
   res.status(isHealthy ? 200 : 503).json(healthData);
 });
+
+// Webhook Ingestion Routes
+app.use('/webhooks', webhookRouter);
 
 // 404 Route Not Found Middleware
 app.use(notFoundHandler);
