@@ -1,551 +1,390 @@
 # Dispatch Queue Engine
 
-> **Self-hosted webhook dispatcher with guaranteed delivery, automatic retries, deduplication, and dead-letter queue.**
-> Deploy once. Never write webhook retry logic again.
+> **Self-hosted webhook dispatcher with guaranteed delivery, automatic retries, deduplication, and dead-letter queue — paired with a zero-cost Hosted Management UI (Bring Your Own Backend).**  
+> Deploy once on your infrastructure. Never write webhook retry or queueing logic again.
+
+> 📚 **API & Tooling**: [Full API Documentation](docs/API_DOCUMENTATION.md) · [Postman Collection](docs/dispatch_queue_engine.postman_collection.json) · [Postman Environment](docs/dispatch_queue_engine.postman_environment.json) · [Architecture Guide](architecture.md)
 
 ---
 
 ## What Is This?
 
-### Who Calls the Dispatcher?
+### The Architecture: Self-Hosted Backend + Hosted Admin UI (BYOB)
 
-> **The "client" is your own backend server — not a browser, not an end-user.**
+Dispatch Queue Engine consists of two seamless parts:
 
-Here is the actual real-world flow:
+1. **Self-Hosted Engine (Your Infrastructure)**: A production-ready Docker Compose bundle running an Express API, BullMQ Worker, Redis 7, and MongoDB 7 on your own server or VPC. Your payload data, database, and webhook events **never leave your infrastructure**.
+2. **Hosted Admin Dashboard (Zero Server Cost for You)**: A static, client-side web application (hosted on Vercel / GitHub Pages). You simply open the dashboard, enter your engine's URL (`http://localhost:3000` or `https://dispatch.yourdomain.com`) and your `ADMIN_TOKEN`, and manage your projects, credentials, and Dead-Letter Queue (DLQ) directly from your browser.
 
 ```
-Your End-User                Your Backend Server           Dispatch Queue Engine
-─────────────                ───────────────────           ─────────────────────
-
-Hits your API    ─────────►  POST /checkout                
-                             → payment confirmed            
-                             → event triggered              
-                             → YOUR SERVER calls ─────────► POST /webhooks/ingest
-                               our dispatcher               (queues the job)
-                                                            │
-                                                            ▼
-                                                      Worker dispatches
-                                                      to your downstream
-                                                      service (Slack, CRM,
-                                                      email, etc.)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ HOSTED ADMIN DASHBOARD (Static Web UI on Vercel / GitHub Pages)         │
+│ • Runs 100% in your browser • Zero customer data stored centrally       │
+└────────────────────────────────────┬────────────────────────────────────┘
+                                     │ Direct browser REST calls
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ YOUR SELF-HOSTED DISPATCH ENGINE (Docker Compose on your server/VPC)    │
+│                                                                         │
+│   Your Backend Server (Client)                                          │
+│   (Payment, Auth, Order Service)                                        │
+│               │                                                         │
+│               │ POST /webhooks/ingest                                   │
+│               │ Headers: X-Project-Key, Idempotency-Key                 │
+│               ▼                                                         │
+│      ┌─────────────────┐       ┌─────────────────┐                      │
+│      │ Dispatch API    ├──────►│ Redis 7         │                      │
+│      │ (:3000)         │       │ Queue + Locks   │                      │
+│      └────────┬────────┘       └────────┬────────┘                      │
+│               │                         │                               │
+│               ▼                         ▼                               │
+│      ┌─────────────────┐       ┌─────────────────┐                      │
+│      │ MongoDB 7       │       │ Dispatch Worker │                      │
+│      │ Projects + DLQ  │◄──────┤ (Isolated Proc) │                      │
+│      └─────────────────┘       └────────┬────────┘                      │
+└─────────────────────────────────────────┼───────────────────────────────┘
+                                          │ POST (HMAC Signed)
+                                          ▼
+                         ┌─────────────────────────────────┐
+                         │ Downstream API (Slack/CRM/Stripe)│
+                         └─────────────────────────────────┘
 ```
-
-You host this engine **once**. Then inside your own backend code, anywhere an event happens, instead of directly calling the third-party API yourself, you call the dispatcher. The dispatcher takes responsibility for everything after that — retries, deduplication, signing, DLQ.
-
-**Before (fragile — you wrote this):**
-```javascript
-// Your backend — POST /checkout handler
-app.post('/checkout', async (req, res) => {
-  await db.saveOrder(req.body);
-  await axios.post('https://slack.com/webhook', { text: 'New order!' }); // what if Slack is down?
-  res.json({ ok: true });
-});
-```
-
-**After (resilient — dispatcher handles it):**
-```javascript
-// Your backend — POST /checkout handler
-app.post('/checkout', async (req, res) => {
-  await db.saveOrder(req.body);
-  // Just call the dispatcher. It handles retries, deduplication, signing.
-  await axios.post('https://your-dispatcher.com/webhooks/ingest', {
-    target_url: 'https://slack.com/webhook',
-    payload: { text: 'New order!' }
-  }, {
-    headers: { 'Idempotency-Key': req.body.order_id }  // unique per order
-  });
-  res.json({ ok: true });  // responds immediately, delivery is async
-});
-```
-
-Your API responds instantly. Delivery happens in the background with full retry guarantees.
 
 ---
 
-## Prerequisites
+## Why Use This?
 
-Before you start, make sure you have:
+Most engineering teams build webhook calls synchronously:
+```
+Your Server ──(HTTP POST)──► Third-Party API (Slack, Stripe, CRM)
+```
+When downstream APIs go down, your app drops events or hangs threads.
 
-- [Docker](https://docs.docker.com/get-docker/) + [Docker Compose](https://docs.docker.com/compose/) installed
-- `git` installed
-- Port `3000` available on your machine
-
-> **No Node.js installation needed** — everything runs inside Docker.
+With **Dispatch Queue Engine**:
+- **Atomic Deduplication**: Same idempotency key cannot be processed twice within 24 hours (< 1ms Redis lock).
+- **Exponential Backoff with Jitter**: Automatic 5-attempt retry schedule ($2^n \times 1000\text{ms} + \text{random jitter}$), preventing thundering herds.
+- **HMAC-SHA256 Cryptographic Signing**: Every outgoing webhook is cryptographically signed with your project's unique secret.
+- **Dead-Letter Queue (DLQ)**: Every exhausted job is captured in MongoDB with full stack traces, inspectable and replayable with one click in the dashboard.
+- **Multi-Project Segregation**: Issue isolated API keys for different environments (Production, Staging) or microservices.
 
 ---
 
 ## Quick Start (5 Minutes)
 
-### Step 1 — Clone the Repository
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/)
+- Port `3000`, `6379`, and `27017` available
+
+---
+
+### Step 1 — Clone and Configure
 
 ```bash
 git clone https://github.com/your-username/dispatch-queue-engine.git
 cd dispatch-queue-engine/backend
-```
-
-### Step 2 — Configure Environment Variables
-
-```bash
 cp .env.example .env
 ```
 
-Open `.env` and fill in your values:
+Open `.env` and configure your security keys:
 
 ```env
-# The port the API server listens on
 PORT=3000
+NODE_ENV=development
 
-# Redis connection (leave as-is if using docker-compose)
-REDIS_HOST=redis
-REDIS_PORT=6379
+# Admin secret used to generate your JWT sessions in the dashboard
+ADMIN_TOKEN=your-secure-admin-token-here
 
-# MongoDB connection (leave as-is if using docker-compose)
-MONGODB_URI=mongodb://mongo:27017/dispatch_engine
+# JWT signing secret (min 16 chars)
+JWT_SECRET=super_secret_jwt_key_at_least_32_chars_long
 
-# HMAC signing secret — minimum 32 characters, keep this secret
-WEBHOOK_SECRET=change-this-to-a-long-random-secret-string
+# Webhook signature secret fallback
+WEBHOOK_SECRET=fallback_webhook_secret_key_at_least_32_chars
 
-# Admin token for the /admin/retry-failed endpoint
-ADMIN_TOKEN=change-this-to-a-secure-admin-token
+# CORS: Allow requests from the Hosted Admin Dashboard
+# Use * in development, or your dashboard domain (e.g. https://dispatch-ui.vercel.app)
+CORS_ORIGIN=*
 ```
 
-### Step 3 — Start Everything
+---
+
+### Step 2 — Start the Engine
 
 ```bash
 docker compose up -d
 ```
 
-This starts four containers:
-- `api` → Express server on port 3000
-- `worker` → BullMQ job processor (isolated from the API)
-- `redis` → Job queue + idempotency key store
-- `mongo` → Dead-letter queue storage
+This launches 4 isolated containers:
+1. `dispatch_api` — Express API server on port `3000`
+2. `dispatch_worker` — BullMQ background worker
+3. `dispatch_redis` — In-memory queue & idempotency lock manager
+4. `dispatch_mongo` — Persistent storage for projects & DLQ records
 
-### Step 4 — Verify It's Running
-
+Verify health:
 ```bash
 curl http://localhost:3000/health
 ```
-
 Expected response:
 ```json
 {
   "status": "ok",
   "redis": "connected",
   "mongodb": "connected",
-  "uptime_seconds": 12
+  "uptime_seconds": 15
 }
 ```
 
-**You're live.** 
+---
+
+### Step 3 — Open the Hosted Dashboard & Create a Project
+
+1. Open the Hosted Web Dashboard: `https://dispatch-ui.vercel.app` (or your custom dashboard URL).
+2. Enter your **Engine API URL** (`http://localhost:3000` for local, or your production URL) and your `ADMIN_TOKEN`.
+3. Click **Connect**.
+4. In the **Projects** tab, click **Create Project** (e.g., `Production Orders`).
+5. Copy your generated:
+   - **Project API Key** (e.g. `proj_live_abc123...`)
+   - **Webhook Secret** (used by downstream services to verify incoming HMAC signatures)
 
 ---
 
-## Integration — How Your Server Calls the Dispatcher
+### Step 4 — Ingest Webhooks from Your Server
 
-### Your server fires this call whenever an event occurs in your system:
+Inside your own backend application, dispatch events to the engine:
 
+#### cURL
 ```bash
-# Example: a payment just succeeded in your backend → call the dispatcher
 curl -X POST http://localhost:3000/webhooks/ingest \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: <your-unique-event-id>" \
+  -H "X-Project-Key: proj_live_abc123..." \
+  -H "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" \
   -d '{
-    "target_url": "https://your-downstream-service.com/webhook",
+    "target_url": "https://api.yourdomain.com/webhooks/orders",
     "payload": {
-      "event": "payment.success",
-      "amount": 9900,
-      "currency": "INR",
-      "order_id": "ORD-12345"
+      "event": "order.completed",
+      "order_id": "ORD-9921",
+      "amount": 4900
     }
   }'
 ```
 
-> The `Idempotency-Key` should be your **event's natural unique ID** — e.g. `order_id`, `transaction_id`, or `event_id`. This ensures if your server accidentally sends the same event twice (retry on timeout), only one job gets queued.
-
-**Dispatcher responds immediately:**
+**Immediate Response (< 20ms):**
 ```json
 {
-  "job_id": "webhook-dispatch:42",
-  "status": "queued"
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "project": {
+    "id": "6790a1b...",
+    "slug": "production-orders"
+  },
+  "status": "queued",
+  "timestamp": "2026-09-22T12:00:00.000Z"
 }
 ```
 
-**Then asynchronously, the dispatcher:**
-1. Locks the `Idempotency-Key` in Redis (blocks any duplicate for 24 hours)
-2. Signs the payload with HMAC-SHA256 → `X-Dispatch-Signature: sha256=...`
-3. POSTs to `target_url` (your downstream service)
-4. On failure → retries up to 5 times with exponential backoff
-5. All 5 fail → stored in MongoDB DLQ, replayable anytime via admin API
+---
 
-### Integration in Node.js (inside your backend)
+## Code Integration Examples
 
-```javascript
-const axios = require('axios');
+### Node.js (TypeScript / Express)
 
-async function dispatchEvent(eventId, targetUrl, payload) {
-  return axios.post('http://your-dispatcher:3000/webhooks/ingest', {
-    target_url: targetUrl,
-    payload: payload
-  }, {
-    headers: {
-      'Content-Type': 'application/json',
-      'Idempotency-Key': eventId   // use your event's natural unique ID
-    }
-  });
+```typescript
+import axios from 'axios';
+import { v4 as uuidv4 } from 'uuid';
+
+const DISPATCHER_URL = process.env.DISPATCHER_URL || 'http://localhost:3000';
+const PROJECT_API_KEY = process.env.DISPATCH_PROJECT_KEY!;
+
+export async function dispatchWebhook(targetUrl: string, payload: Record<string, unknown>, naturalEventId?: string) {
+  const idempotencyKey = naturalEventId || uuidv4();
+
+  return axios.post(
+    `${DISPATCHER_URL}/webhooks/ingest`,
+    {
+      target_url: targetUrl,
+      payload,
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Project-Key': PROJECT_API_KEY,
+        'Idempotency-Key': idempotencyKey,
+      },
+      timeout: 5000,
+    },
+  );
 }
 
-// Usage inside your checkout handler:
-app.post('/checkout', async (req, res) => {
-  const order = await db.saveOrder(req.body);
+// Inside your checkout route:
+app.post('/api/checkout', async (req, res) => {
+  const order = await db.createOrder(req.body);
 
-  // Fire-and-forget to dispatcher — your API responds instantly
-  dispatchEvent(order.id, 'https://crm.example.com/hook', {
-    event: 'order.created',
-    order_id: order.id,
-    amount: order.total
-  });
+  // Non-blocking fire-and-forget to the dispatcher:
+  dispatchWebhook('https://crm.partner.com/webhook', {
+    event: 'order.placed',
+    orderId: order.id,
+    total: order.amount,
+  }, order.id);
 
-  res.json({ ok: true, order_id: order.id });
+  res.status(200).json({ success: true, orderId: order.id });
 });
 ```
 
-### Integration in Python (inside your backend)
+### Python (FastAPI / Django)
 
 ```python
+import uuid
 import requests
 
-def dispatch_event(event_id: str, target_url: str, payload: dict):
-    requests.post(
-        'http://your-dispatcher:3000/webhooks/ingest',
-        json={'target_url': target_url, 'payload': payload},
+DISPATCHER_URL = "http://localhost:3000"
+PROJECT_API_KEY = "proj_live_abc123..."
+
+def send_webhook(target_url: str, payload: dict, event_id: str = None):
+    idempotency_key = event_id or str(uuid.uuid4())
+    
+    response = requests.post(
+        f"{DISPATCHER_URL}/webhooks/ingest",
+        json={"target_url": target_url, "payload": payload},
         headers={
-            'Content-Type': 'application/json',
-            'Idempotency-Key': event_id  # your event's natural unique ID
-        }
+            "Content-Type": "application/json",
+            "X-Project-Key": PROJECT_API_KEY,
+            "Idempotency-Key": idempotency_key,
+        },
+        timeout=5,
     )
+    return response.json()
 ```
 
 ---
 
-## Idempotency — Blocking Duplicate Events
+## Verifying Incoming Webhooks (Downstream Service)
 
-Every request **must** include an `Idempotency-Key` header (UUID v4 format).
-
-```bash
-# First request → 202 Accepted, job queued
-curl -X POST http://localhost:3000/webhooks/ingest \
-  -H "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" \
-  ...
-
-# Exact same key again → 409 Conflict (blocked, no duplicate job)
-curl -X POST http://localhost:3000/webhooks/ingest \
-  -H "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" \
-  ...
+Every HTTP request dispatched by the engine contains a cryptographic signature:
+```
+X-Dispatch-Signature: sha256=<hex_signature>
 ```
 
-The same key is blocked for **24 hours** after first use.
+Verify it in your destination service to ensure the payload was not tampered with:
 
-**Generating a UUID in code:**
+```typescript
+import crypto from 'crypto';
 
-```javascript
-// Node.js
-const { v4: uuidv4 } = require('uuid');
-const key = uuidv4();
-```
+export function verifyDispatchSignature(
+  rawBody: string,
+  receivedHeader: string,
+  projectWebhookSecret: string,
+): boolean {
+  if (!receivedHeader || !receivedHeader.startsWith('sha256=')) return false;
 
-```python
-# Python
-import uuid
-key = str(uuid.uuid4())
-```
-
-```bash
-# bash / CI
-KEY=$(uuidgen)
-```
-
----
-
-## Verifying Incoming Payloads (Downstream Service)
-
-When the engine dispatches to your `target_url`, every request includes:
-
-```
-X-Dispatch-Signature: sha256=<hex>
-```
-
-Verify it in your downstream service:
-
-```javascript
-// Node.js verification
-const crypto = require('crypto');
-
-function verifyWebhook(req, secret) {
-  const receivedSig = req.headers['x-dispatch-signature'];
-  if (!receivedSig) return false;
-
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(JSON.stringify(req.body))
+  const expectedSignature = crypto
+    .createHmac('sha256', projectWebhookSecret)
+    .update(rawBody)
     .digest('hex');
 
-  const sigBuf = Buffer.from(receivedSig.replace('sha256=', ''), 'hex');
-  const expBuf = Buffer.from(expected, 'hex');
+  const receivedSignature = receivedHeader.replace('sha256=', '');
 
-  // timingSafeEqual prevents timing attacks
-  return sigBuf.length === expBuf.length &&
-    crypto.timingSafeEqual(sigBuf, expBuf);
+  return crypto.timingSafeEqual(
+    Buffer.from(receivedSignature, 'hex'),
+    Buffer.from(expectedSignature, 'hex'),
+  );
 }
-
-// In your Express route:
-app.post('/webhook', (req, res) => {
-  if (!verifyWebhook(req, process.env.WEBHOOK_SECRET)) {
-    return res.status(401).json({ error: 'Invalid signature' });
-  }
-  // Process event...
-  res.status(200).send('ok');
-});
-```
-
-```python
-# Python verification
-import hmac, hashlib, json
-
-def verify_webhook(body: dict, received_sig: str, secret: str) -> bool:
-    payload = json.dumps(body, separators=(',', ':'))
-    expected = hmac.new(
-        secret.encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()
-    sig = received_sig.replace('sha256=', '')
-    return hmac.compare_digest(expected, sig)
 ```
 
 ---
 
-## Retry Behavior
+## Dead-Letter Queue (DLQ) & Failure Recovery
 
-You don't need to configure anything — retries are automatic.
+When a webhook destination consistently fails (e.g. 500 Server Error, timeout, or unreachable host), the worker attempts 5 exponential retries with randomized jitter:
 
-| Attempt | Delay |
-|---|---|
-| 1 | Immediate |
-| 2 | ~2 seconds |
-| 3 | ~4 seconds |
-| 4 | ~8 seconds |
-| 5 | ~16 seconds |
-
-After all 5 attempts fail, the job is moved to the dead-letter queue in MongoDB.
-
----
-
-## Dead-Letter Queue — Replaying Failed Jobs
-
-### View Failed Jobs
-
-Connect to your MongoDB container:
-
-```bash
-docker compose exec mongo mongosh dispatch_engine
+```
+Attempt 1: immediate
+Attempt 2: ~2s (+ 0-500ms jitter)
+Attempt 3: ~4s (+ 0-500ms jitter)
+Attempt 4: ~8s (+ 0-500ms jitter)
+Attempt 5: ~16s (+ 0-500ms jitter)
 ```
 
-```sql
--- See all failed jobs
-SELECT job_id, target_url, error_message, attempt_count, failed_at
-FROM dead_letter_queue
-WHERE replayed_at IS NULL
-ORDER BY failed_at DESC;
-```
+If all 5 attempts fail:
+1. The event is captured in MongoDB under `dead_letter_queues` with `status: 'pending'`.
+2. The full `error.message` and `error.stack` are preserved for debugging.
+3. You can inspect the failure in the **Hosted Dashboard** and click **Replay Job** or **Bulk Replay**.
 
-### Replay Specific Jobs
+### Programmatic Replay via REST API
 
 ```bash
-curl -X POST http://localhost:3000/admin/retry-failed \
-  -H "Authorization: Bearer your-admin-token" \
+# Authenticate Admin and get JWT
+TOKEN=$(curl -s -X POST http://localhost:3000/api/admin/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "job_ids": [
-      "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-    ]
-  }'
-```
+  -d '{"adminToken":"your-secure-admin-token-here"}' | jq -r '.data.token')
 
-### Replay the Oldest N Failed Jobs
+# Replay a specific dead-letter job
+curl -X POST http://localhost:3000/api/projects/<PROJECT_ID>/dlq/replay/<JOB_ID> \
+  -H "Authorization: Bearer $TOKEN"
 
-```bash
-curl -X POST http://localhost:3000/admin/retry-failed \
-  -H "Authorization: Bearer your-admin-token" \
-  -H "Content-Type: application/json" \
-  -d '{ "limit": 20 }'
-```
-
-**Response:**
-```json
-{
-  "replayed": 18,
-  "skipped": 2,
-  "job_ids": ["...", "...", "..."]
-}
+# Bulk replay all pending failed jobs for a project
+curl -X POST http://localhost:3000/api/projects/<PROJECT_ID>/dlq/replay-all \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
 
-## API Reference
+## Complete API Reference
 
-### `POST /webhooks/ingest`
+### Webhook Ingestion
+* **`POST /webhooks/ingest`**
+  * **Headers**: `X-Project-Key` (required), `Idempotency-Key` (UUID v4 required).
+  * **Body**: `{ "target_url": "https://...", "payload": { ... } }`
+  * **Status Codes**:
+    * `202`: Enqueued successfully.
+    * `400`: Missing or invalid URL / Idempotency-Key.
+    * `401`: Invalid or archived Project Key.
+    * `409`: Duplicate event detected (blocked by Redis within 24h).
+    * `503`: Redis / DB unavailable.
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `target_url` | string (URL) | Yes | Where to dispatch the payload |
-| `payload` | object | Yes | Any JSON object you want delivered |
+### Admin Authentication
+* **`POST /api/admin/login`**: Body: `{ "adminToken": "..." }` → Returns JWT (`expiresIn: "24h"`).
+* **`GET /api/admin/me`**: Validates active admin session.
+* **`GET /api/admin/stats`**: System overview (projects count, global DLQ totals).
 
-| Header | Required | Description |
-|---|---|---|
-| `Idempotency-Key` | Yes | UUID v4. Blocks duplicates for 24h |
-| `Content-Type` | Yes | `application/json` |
+### Project & DLQ Control Plane (Protected by `Bearer <JWT>`)
+* **`POST /api/projects`**: Create project (`{ "name": "...", "slug": "...", "description": "..." }`).
+* **`GET /api/projects`**: List projects (`?status=active&limit=50&skip=0`).
+* **`GET /api/projects/:id`**: Get project details and credentials.
+* **`PATCH /api/projects/:id`**: Update project metadata or status.
+* **`POST /api/projects/:id/rotate-keys`**: Regenerate API Key and Webhook Secret.
+* **`DELETE /api/projects/:id`**: Soft-archive project.
+* **`GET /api/projects/:id/dlq`**: List DLQ entries (`?status=pending&limit=50&skip=0`).
+* **`GET /api/projects/:id/dlq/stats`**: Get DLQ metrics for project.
+* **`POST /api/projects/:id/dlq/replay/:jobId`**: Replay specific failed job.
+* **`POST /api/projects/:id/dlq/replay-all`**: Replay all failed jobs for project.
 
-| Status | Meaning |
-|---|---|
-| `202` | Job queued successfully |
-| `400` | Missing/invalid body or Idempotency-Key |
-| `409` | Duplicate — same key already used within 24h |
-| `503` | Queue unavailable (Redis down) |
-
----
-
-### `POST /admin/retry-failed`
-
-| Header | Required | Description |
-|---|---|---|
-| `Authorization` | Yes | `Bearer <ADMIN_TOKEN>` |
-
-| Field | Type | Description |
-|---|---|---|
-| `job_ids` | string[] | Specific job IDs to replay |
-| `limit` | number | Replay oldest N jobs (max 100) |
-
----
-
-### `GET /health`
-
-No authentication required.
-
-```json
-{
-  "status": "ok",
-  "redis": "connected",
-  "mongodb": "connected",
-  "uptime_seconds": 3842
-}
-```
-
----
-
-## Environment Variables Reference
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `PORT` | No | `3000` | API server port |
-| `REDIS_HOST` | Yes | — | Redis hostname |
-| `REDIS_PORT` | No | `6379` | Redis port |
-| `MONGODB_URI` | Yes | — | MongoDB connection string |
-| `WEBHOOK_SECRET` | Yes | — | HMAC signing secret (min 32 chars) |
-| `ADMIN_TOKEN` | Yes | — | Bearer token for admin endpoints |
-| `QUEUE_NAME` | No | `webhook-dispatch` | BullMQ queue name |
-| `MAX_RETRIES` | No | `5` | Number of retry attempts |
-| `JOB_TIMEOUT_MS` | No | `10000` | Per-attempt HTTP timeout (ms) |
-| `IDEMPOTENCY_TTL_SECONDS` | No | `86400` | Idempotency key lifetime (24h) |
-
----
-
-## Running Without Docker (Development)
-
-If you want to run locally with your own Redis and MongoDB:
-
-```bash
-# Install dependencies
-npm install
-
-# Create the DLQ table
-psql $DATABASE_URL -f src/db/migrations/001_create_dlq.sql
-
-# Start API server
-npm run start:api
-
-# Start worker in a separate terminal
-npm run start:worker
-```
-
----
-
-## Running Tests
-
-```bash
-# All tests
-npm test
-
-# Unit tests only
-npm run test:unit
-
-# Integration tests only
-npm run test:integration
-
-# Watch mode
-npm run test:watch
-```
+### System Health
+* **`GET /health`**: Public healthcheck for Redis, MongoDB, and uptime.
 
 ---
 
 ## Scaling Workers
 
-To handle higher throughput, run multiple worker replicas:
+To scale delivery throughput under heavy load, scale the worker container:
 
 ```bash
-# Scale to 3 worker containers
-docker compose up -d --scale worker=3
+docker compose up -d --scale worker=4
 ```
 
-BullMQ uses Redis-based distributed locking — multiple workers process jobs concurrently without conflicts or double-processing.
+BullMQ's distributed Redis lock guarantees that jobs are consumed concurrently without double-processing or conflicts.
 
 ---
 
-## Stopping the Engine
+## Stopping the Service
 
 ```bash
-# Stop all containers
+# Stop containers (preserves Redis & MongoDB data)
 docker compose down
 
-# Stop and delete all data (Redis + MongoDB volumes)
+# Stop and wipe all persistent data
 docker compose down -v
-```
-
----
-
-## Troubleshooting
-
-### `409 Conflict` on every request
-Your `Idempotency-Key` was already used. Generate a new UUID for each unique event.
-
-### Jobs not being dispatched
-Check the worker is running:
-```bash
-docker compose logs worker --tail=50
-```
-
-### DLQ filling up
-Your `target_url` may be consistently unreachable. Check:
-1. The URL is publicly accessible from inside Docker
-2. The downstream service is returning 2xx responses
-3. No firewall is blocking outbound requests from the container
-
-### Redis connection refused
-```bash
-docker compose logs redis
-docker compose restart redis
 ```
 
 ---
 
 ## License
 
-MIT — free to use, host, and modify.
+MIT — free to use, self-host, and modify.

@@ -102,11 +102,10 @@ export class ProjectService {
    * Retrieves active project by API key via Redis cache-aside pattern.
    * Target response time < 2ms via Redis.
    */
-  public async getProjectByKey(apiKey: string): Promise<CachedProject | null> {
-    if (!apiKey) return null;
+  public async getProjectByKey(keyOrSecret: string): Promise<CachedProject | null> {
+    if (!keyOrSecret) return null;
 
-
-    const cacheKey = this.getCacheKey(apiKey);
+    const cacheKey = this.getCacheKey(keyOrSecret);
 
     try {
       const cached = await redis.get(cacheKey);
@@ -117,8 +116,11 @@ export class ProjectService {
       logger.warn('Redis cache lookup error in project service:', err);
     }
 
-    // Cache miss: Query MongoDB Atlas
-    const project = await ProjectModel.findOne({ apiKey, status: 'active' });
+    // Cache miss: Query MongoDB by apiKey or webhookSecret
+    const project = await ProjectModel.findOne({
+      $or: [{ apiKey: keyOrSecret }, { webhookSecret: keyOrSecret }],
+      status: 'active',
+    });
     if (!project) {
       return null;
     }
@@ -133,7 +135,10 @@ export class ProjectService {
     };
 
     try {
-      await redis.set(cacheKey, JSON.stringify(projectData), 'EX', this.cacheTtlSeconds);
+      await Promise.all([
+        redis.set(this.getCacheKey(project.apiKey), JSON.stringify(projectData), 'EX', this.cacheTtlSeconds),
+        redis.set(this.getCacheKey(project.webhookSecret), JSON.stringify(projectData), 'EX', this.cacheTtlSeconds),
+      ]);
     } catch (err) {
       logger.warn('Failed to cache project in Redis:', err);
     }
@@ -142,12 +147,10 @@ export class ProjectService {
   }
 
   /**
-   * Helper to write project to Redis cache.
+   * Helper to write project to Redis cache for both apiKey and webhookSecret.
    */
   private async cacheProject(project: IProjectDocument): Promise<void> {
     try {
-  
-      const cacheKey = this.getCacheKey(project.apiKey);
       const data: CachedProject = {
         id: project._id.toString(),
         name: project.name,
@@ -156,19 +159,25 @@ export class ProjectService {
         webhookSecret: project.webhookSecret,
         status: project.status,
       };
-      await redis.set(cacheKey, JSON.stringify(data), 'EX', this.cacheTtlSeconds);
+      await Promise.all([
+        redis.set(this.getCacheKey(project.apiKey), JSON.stringify(data), 'EX', this.cacheTtlSeconds),
+        redis.set(this.getCacheKey(project.webhookSecret), JSON.stringify(data), 'EX', this.cacheTtlSeconds),
+      ]);
     } catch (err) {
       logger.warn('Failed to update project cache:', err);
     }
   }
 
   /**
-   * Evicts project from Redis cache.
+   * Evicts project credentials from Redis cache.
    */
-  private async evictCache(apiKey: string): Promise<void> {
+  private async evictCache(apiKey: string, webhookSecret?: string): Promise<void> {
     try {
-  
-      await redis.del(this.getCacheKey(apiKey));
+      const keysToDelete = [this.getCacheKey(apiKey)];
+      if (webhookSecret) {
+        keysToDelete.push(this.getCacheKey(webhookSecret));
+      }
+      await redis.del(...keysToDelete);
     } catch (err) {
       logger.warn('Failed to evict project cache:', err);
     }
@@ -223,7 +232,7 @@ export class ProjectService {
     if (data.status) {
       project.status = data.status;
       if (data.status === 'archived') {
-        await this.evictCache(project.apiKey);
+        await this.evictCache(project.apiKey, project.webhookSecret);
       }
     }
 
@@ -241,13 +250,14 @@ export class ProjectService {
   public async rotateCredentials(id: string): Promise<IProjectDocument> {
     const project = await this.getProjectById(id);
     const oldApiKey = project.apiKey;
+    const oldWebhookSecret = project.webhookSecret;
 
     project.apiKey = this.generateApiKey();
     project.webhookSecret = this.generateWebhookSecret();
     await project.save();
 
-    // Evict old key and cache new key
-    await this.evictCache(oldApiKey);
+    // Evict old keys and cache new keys
+    await this.evictCache(oldApiKey, oldWebhookSecret);
     await this.cacheProject(project);
 
     logger.info('Project credentials rotated:', {

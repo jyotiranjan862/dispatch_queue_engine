@@ -1,0 +1,572 @@
+{
+  "info": {
+    "_postman_id": "8f3b2a1c-9d4e-4b2a-8c1d-7e6f5a4b3c2d",
+    "name": "Dispatch Queue Engine API",
+    "description": "Comprehensive Postman collection for the self-hosted Dispatch Queue Engine.\n\nIncludes endpoints for:\n- System Health & Root Info\n- Admin Authentication & Global Analytics\n- Project & Credential Management\n- Dead-Letter Queue (DLQ) Inspection & Replays\n- Idempotent Webhook Ingestion with HMAC Signing",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. System & Health",
+      "item": [
+        {
+          "name": "Root Service Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": ["{{baseUrl}}"],
+              "path": [""]
+            },
+            "description": "Returns basic service name, version, and running status."
+          },
+          "response": []
+        },
+        {
+          "name": "System Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Validates active connectivity to Redis and MongoDB, and returns process uptime."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Admin Authentication",
+      "item": [
+        {
+          "name": "Admin Login (Get JWT)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data && jsonData.data.token) {",
+                  "    pm.environment.set(\"bearerToken\", jsonData.data.token);",
+                  "    console.log(\"Saved bearerToken to environment:\", jsonData.data.token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"adminToken\": \"{{adminToken}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "login"]
+            },
+            "description": "Authenticates using the instance's ADMIN_TOKEN and returns a 24-hour signed JWT. Test script automatically saves the token to {{bearerToken}}."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Current Admin Session",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "me"]
+            },
+            "description": "Verifies the current active admin JWT session."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Global Admin Stats",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "stats"]
+            },
+            "description": "Returns system-wide aggregated metrics, including total projects (active vs archived) and global DLQ counts."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Project Management",
+      "item": [
+        {
+          "name": "Create Project",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data) {",
+                  "    if (jsonData.data.id) pm.environment.set(\"projectId\", jsonData.data.id);",
+                  "    if (jsonData.data.apiKey) pm.environment.set(\"projectApiKey\", jsonData.data.apiKey);",
+                  "    if (jsonData.data.webhookSecret) pm.environment.set(\"webhookSecret\", jsonData.data.webhookSecret);",
+                  "    console.log(\"Saved projectId:\", jsonData.data.id);",
+                  "    console.log(\"Saved projectApiKey:\", jsonData.data.apiKey);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Production Service\",\n  \"slug\": \"production-service\",\n  \"description\": \"Main production dispatch channel for critical notifications and order webhooks\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/projects",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects"]
+            },
+            "description": "Registers a new project, generating a unique API key and cryptographic webhook signing secret. Automatically updates {{projectId}} and {{projectApiKey}}."
+          },
+          "response": []
+        },
+        {
+          "name": "List Projects",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects?status=active&limit=50&skip=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "active",
+                  "description": "Optional filter: 'active' or 'archived'"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Pagination limit (max 100)"
+                },
+                {
+                  "key": "skip",
+                  "value": "0",
+                  "description": "Pagination offset"
+                }
+              ]
+            },
+            "description": "Lists all registered projects with pagination."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Project By ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}"]
+            },
+            "description": "Retrieves details, credentials, and configuration for a specific project."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Project",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Production Orders & Alerts\",\n  \"description\": \"Updated project description for production orders\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}"]
+            },
+            "description": "Updates project metadata (name, description, status)."
+          },
+          "response": []
+        },
+        {
+          "name": "Rotate Project Keys",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data) {",
+                  "    if (jsonData.data.newApiKey) pm.environment.set(\"projectApiKey\", jsonData.data.newApiKey);",
+                  "    if (jsonData.data.newWebhookSecret) pm.environment.set(\"webhookSecret\", jsonData.data.newWebhookSecret);",
+                  "    console.log(\"Rotated projectApiKey:\", jsonData.data.newApiKey);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/rotate-keys",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}", "rotate-keys"]
+            },
+            "description": "Regenerates the API Key and HMAC Webhook Secret for the project. Updates environment variables automatically."
+          },
+          "response": []
+        },
+        {
+          "name": "Archive Project (Soft Delete)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}"]
+            },
+            "description": "Marks the project as archived. Ingest requests using this project's key will be rejected."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Dead-Letter Queue (DLQ) & Replay",
+      "item": [
+        {
+          "name": "Get Project DLQ Records",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData && jsonData.data && jsonData.data.records && jsonData.data.records.length > 0) {",
+                  "    pm.environment.set(\"failedJobId\", jsonData.data.records[0].jobId);",
+                  "    console.log(\"Saved failedJobId:\", jsonData.data.records[0].jobId);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/dlq?status=pending&limit=50&skip=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}", "dlq"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "pending",
+                  "description": "Optional: 'pending', 'replaying', 'replayed', 'exhausted'"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Pagination limit"
+                },
+                {
+                  "key": "skip",
+                  "value": "0",
+                  "description": "Pagination skip"
+                }
+              ]
+            },
+            "description": "Retrieves paginated dead-letter failure entries for this project, including complete error message and stack trace."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Project DLQ Stats",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/dlq/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}", "dlq", "stats"]
+            },
+            "description": "Returns counts of pending, replaying, replayed, and exhausted DLQ jobs for this project."
+          },
+          "response": []
+        },
+        {
+          "name": "Replay Specific DLQ Job",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/dlq/replay/{{failedJobId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}", "dlq", "replay", "{{failedJobId}}"]
+            },
+            "description": "Re-enqueues a specific exhausted job into the active BullMQ queue for redelivery."
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk Replay All DLQ Jobs",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/dlq/replay-all",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}", "dlq", "replay-all"]
+            },
+            "description": "Bulk re-enqueues all pending and exhausted dead-letter jobs for this project."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Webhook Ingestion (Client Service)",
+      "item": [
+        {
+          "name": "Ingest Webhook (Success)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Generate a fresh random UUID v4 for the Idempotency-Key",
+                  "var uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {",
+                  "    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);",
+                  "    return v.toString(16);",
+                  "});",
+                  "pm.variables.set(\"dynamicIdempotencyKey\", uuid);",
+                  "console.log(\"Generated new Idempotency-Key:\", uuid);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Project-Key",
+                "value": "{{projectApiKey}}",
+                "description": "Your project's unique API Key"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{dynamicIdempotencyKey}}",
+                "description": "UUID v4 event identifier (blocks duplicates for 24h)"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target_url\": \"https://httpbin.org/post\",\n  \"payload\": {\n    \"event\": \"payment.success\",\n    \"orderId\": \"ORD-98214\",\n    \"amount\": 4900,\n    \"currency\": \"INR\",\n    \"customer\": {\n      \"name\": \"Jane Doe\",\n      \"email\": \"jane@example.com\"\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/ingest",
+              "host": ["{{baseUrl}}"],
+              "path": ["webhooks", "ingest"]
+            },
+            "description": "Dispatches an event asynchronously. Returns 202 Accepted in < 20ms."
+          },
+          "response": []
+        },
+        {
+          "name": "Ingest Webhook (Duplicate Test - Expect 409 Conflict)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Project-Key",
+                "value": "{{projectApiKey}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{dynamicIdempotencyKey}}",
+                "description": "Reusing the same key from previous request to demonstrate duplicate blocking"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target_url\": \"https://httpbin.org/post\",\n  \"payload\": {\n    \"event\": \"payment.duplicate_attempt\",\n    \"orderId\": \"ORD-98214\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/ingest",
+              "host": ["{{baseUrl}}"],
+              "path": ["webhooks", "ingest"]
+            },
+            "description": "Sends the same Idempotency-Key. Redis SETNX blocks the duplicate in < 1ms, returning 409 Conflict."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

@@ -15,11 +15,18 @@ declare global {
  * Prevents orphan requests and enforces project isolation.
  */
 export async function validateProjectKey(req: Request, _res: Response, next: NextFunction): Promise<void> {
-  const projectKey = (req.headers['x-project-key'] || req.headers['x-api-key']) as string | undefined;
+  const projectKey = (
+    req.headers['x-project-key'] ||
+    req.headers['x-api-key'] ||
+    req.headers['x-project-secret'] ||
+    req.headers['x-webhook-secret']
+  ) as string | undefined;
 
   if (!projectKey || typeof projectKey !== 'string' || projectKey.trim().length === 0) {
     return next(
-      new UnauthorizedError('Project key is required. Provide X-Project-Key or X-API-Key header to ingest webhooks'),
+      new UnauthorizedError(
+        'Project authentication required. Provide X-Project-Key, X-API-Key, or X-Webhook-Secret header to ingest webhooks',
+      ),
     );
   }
 
