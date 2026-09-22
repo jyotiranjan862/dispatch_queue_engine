@@ -60,8 +60,9 @@ export class DispatchService {
     payload: Record<string, unknown>,
     idempotencyKey: string,
     attempt: number = 1,
+    secret?: string,
   ): Promise<DispatchResult> {
-    const signature = signerService.signPayload(payload);
+    const signature = signerService.signPayload(payload, secret);
     const startTime = Date.now();
 
     try {

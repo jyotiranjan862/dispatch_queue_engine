@@ -27,6 +27,12 @@ const envSchema = z.object({
     .min(16, 'WEBHOOK_SECRET must be at least 16 characters long for HMAC security')
     .default('development_webhook_secret_key_32_characters_long_for_hmac'),
   ADMIN_TOKEN: z.string().min(1).default('dev_admin_bearer_token_12345'),
+  JWT_SECRET: z
+    .string()
+    .min(16, 'JWT_SECRET must be at least 16 characters long')
+    .default('super_secret_jwt_admin_key_32_characters_long'),
+  JWT_EXPIRES_IN: z.string().default('24h'),
+  CORS_ORIGIN: z.string().default('*'),
 
   // BullMQ & Jobs
   QUEUE_NAME: z.string().default('webhook-dispatch'),

@@ -9,6 +9,9 @@ services:
     env_file: .env
     environment:
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_USERNAME=
       - MONGODB_URI=mongodb://mongo:27017/dispatch_engine
     depends_on:
       redis:
@@ -27,6 +30,9 @@ services:
     env_file: .env
     environment:
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_USERNAME=
       - MONGODB_URI=mongodb://mongo:27017/dispatch_engine
     depends_on:
       redis:

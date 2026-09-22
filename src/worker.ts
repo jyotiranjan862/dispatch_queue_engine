@@ -35,6 +35,7 @@ async function processWebhookJob(job: Job<WebhookJobData>): Promise<DispatchResu
     job.data.payload,
     job.data.idempotency_key,
     attempt,
+    job.data.webhookSecret,
   );
 }
 

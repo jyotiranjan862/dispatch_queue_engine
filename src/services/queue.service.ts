@@ -3,6 +3,9 @@ import { QUEUE_NAME, createQueueConnection, defaultJobOptions } from '../config/
 import { logger } from '../utils/logger';
 
 export interface WebhookJobData {
+  projectId: string;
+  projectSlug: string;
+  webhookSecret: string;
   idempotency_key: string;
   target_url: string;
   payload: Record<string, unknown>;

@@ -9,7 +9,7 @@ export const redisConfig: RedisOptions = {
   host: env.REDIS_HOST,
   port: env.REDIS_PORT,
   username: env.REDIS_USERNAME || undefined,
-  password: env.REDIS_PASSWORD,
+  password: env.REDIS_PASSWORD || undefined,
   db: env.REDIS_DB,
   maxRetriesPerRequest: null,
   enableReadyCheck: true,

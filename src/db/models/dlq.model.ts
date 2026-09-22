@@ -1,8 +1,10 @@
-import { Schema, model, Document } from 'mongoose';
+import { Schema, model, Document, Types } from 'mongoose';
 
 export type DLQStatus = 'pending' | 'replaying' | 'replayed' | 'exhausted';
 
 export interface IDLQDocument extends Document {
+  projectId: Types.ObjectId;
+  projectSlug: string;
   jobId: string;
   idempotencyKey: string;
   targetUrl: string;
@@ -23,6 +25,17 @@ export interface IDLQDocument extends Document {
 
 const dlqSchema = new Schema<IDLQDocument>(
   {
+    projectId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Project',
+      required: true,
+      index: true,
+    },
+    projectSlug: {
+      type: String,
+      required: true,
+      index: true,
+    },
     jobId: {
       type: String,
       required: true,
@@ -72,8 +85,9 @@ const dlqSchema = new Schema<IDLQDocument>(
   },
 );
 
-// Compound index for querying pending/exhausted failures in chronological order
-dlqSchema.index({ status: 1, createdAt: -1 });
+// Compound indexes for project segregation and fast dashboard querying
+dlqSchema.index({ projectId: 1, status: 1, createdAt: -1 });
+dlqSchema.index({ projectSlug: 1, createdAt: -1 });
 
 export const DLQModel = model<IDLQDocument>('DeadLetterQueue', dlqSchema);
 
