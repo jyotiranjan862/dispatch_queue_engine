@@ -11,12 +11,22 @@ export class AuthController {
     const { adminToken } = req.body;
     const authResult = authService.loginAdmin(adminToken);
 
+    const host = req.get('host') || 'localhost:3000';
+    const protocol = req.protocol || 'http';
+    const baseUrl = `${protocol}://${host}`;
+
     res.status(200).json({
       status: 'success',
       data: {
         token: authResult.token,
         expiresIn: authResult.expiresIn,
         role: 'admin',
+        endpoints: {
+          base: baseUrl,
+          health: `${baseUrl}/health`,
+          ingest: `${baseUrl}/webhooks/ingest`,
+          projects: `${baseUrl}/api/projects`,
+        },
       },
     });
   });
